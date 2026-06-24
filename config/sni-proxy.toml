@@ -1,0 +1,14 @@
+listen = "0.0.0.0:443"
+peek_timeout_ms = 5000
+
+[backends]
+bd-relay = "10.10.0.1:443"
+direct = "8.8.8.8:443"
+
+[routes]
+"api.example.com" = "direct"
+"login.example.com" = "direct"
+"*.bkash.com" = "bd-relay"
+"*.nagad.com" = "bd-relay"
+"*.google.com" = "direct"
+"regex:^staging\\.[a-z0-9-]+\\.example\\.com$" = "direct"

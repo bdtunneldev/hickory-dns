@@ -1,0 +1,38 @@
+[package]
+name = "hickory-sni-proxy"
+description = "TLS SNI passthrough proxy (sniproxy-style routing without termination)"
+readme = "README.md"
+
+version.workspace = true
+authors.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+homepage.workspace = true
+repository.workspace = true
+keywords = ["dns", "tls", "sni", "proxy"]
+categories = ["network-programming"]
+license.workspace = true
+
+[lib]
+name = "hickory_sni_proxy"
+path = "src/lib.rs"
+
+[[bin]]
+name = "hickory-sni-proxy"
+path = "src/main.rs"
+
+[dependencies]
+clap = { workspace = true, default-features = false, features = ["derive", "help", "std"] }
+regex = { workspace = true, features = ["std"] }
+serde = { workspace = true, features = ["derive"] }
+thiserror.workspace = true
+tokio = { workspace = true, features = ["io-util", "macros", "net", "rt-multi-thread", "sync", "time"] }
+toml.workspace = true
+tracing.workspace = true
+tracing-subscriber = { workspace = true, features = ["env-filter", "fmt", "std"] }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["io-util", "macros", "net", "rt-multi-thread", "time"] }
+
+[lints]
+workspace = true
