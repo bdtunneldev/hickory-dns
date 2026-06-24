@@ -18,7 +18,7 @@ mod ttl_modifier;
 
 pub use fastest::{FastestConfig, FastestZoneHandler};
 pub use rate_limiter::{RateLimiterConfig, RateLimiterZoneHandler};
-pub use router::{RouterConfig, RouterZoneHandler};
-pub use split::{SplitConfig, SplitZoneHandler};
+pub use router::{RouteConfig, RouterConfig, RouterZoneHandler};
+pub use split::{BlocklistSource, SplitConfig, SplitZoneHandler};
 pub use tenant_rate_limiter::{TenantRateLimiterConfig, TenantRateLimiterZoneHandler};
 pub use ttl_modifier::{TtlModifierConfig, TtlModifierZoneHandler};

@@ -12,7 +12,7 @@ PP2_SIG = b"\r\n\r\n\0\r\nQUIT\n"
 def pp2_header() -> bytes:
     src = socket.inet_aton("203.0.113.50")
     dst = socket.inet_aton("127.0.0.1")
-    payload = src + dst + struct.pack("!HH", 54321, 5301)
+    payload = src + dst + struct.pack("!HH", 54321, 53)
     return PP2_SIG + bytes([0x21, 0x11]) + struct.pack("!H", len(payload)) + payload
 
 
@@ -41,7 +41,7 @@ def metrics_ok(url: str) -> None:
 
 def main() -> None:
     host = sys.argv[1] if len(sys.argv) > 1 else "127.0.0.1"
-    port = int(sys.argv[2]) if len(sys.argv) > 2 else 5301
+    port = int(sys.argv[2]) if len(sys.argv) > 2 else 53
     metrics_port = int(sys.argv[3]) if len(sys.argv) > 3 else 9000
     dns_ping(host, port)
     metrics_ok(f"http://{host}:{metrics_port}/metrics")

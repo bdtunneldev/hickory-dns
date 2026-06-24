@@ -29,8 +29,8 @@ pub struct ProxyHeader {
 
 /// Read and parse a PROXY protocol v2 header from the start of a TCP stream.
 ///
-/// If the stream does not begin with a PROXY signature, returns `Ok(None)` and
-/// leaves the stream unread so the caller can treat it as a plain DNS connection.
+/// When `proxy_protocol` is enabled on the server, connections must begin with a
+/// valid PROXY v2 header. Invalid or missing headers are rejected by the caller.
 pub async fn read_proxy_header<R: AsyncRead + Unpin>(
     stream: &mut R,
 ) -> io::Result<Option<ProxyHeader>> {
@@ -156,10 +156,10 @@ mod tests {
     #[test]
     fn parse_ipv4_proxy_with_tenant_tlv() {
         let mut payload = Vec::new();
-        // src 203.0.113.1:12345 dst 10.0.0.1:5301
+        // src 203.0.113.1:12345 dst 10.0.0.1:53
         payload.extend_from_slice(&[203, 0, 113, 1, 10, 0, 0, 1]);
         payload.extend_from_slice(&49u16.to_be_bytes()); // src port
-        payload.extend_from_slice(&5301u16.to_be_bytes()); // dst port
+        payload.extend_from_slice(&53u16.to_be_bytes()); // dst port
         // tenant TLV
         payload.extend_from_slice(&TENANT_TLV_TYPE.to_be_bytes());
         payload.push(6);

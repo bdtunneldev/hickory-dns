@@ -497,7 +497,7 @@ async fn handle_udp(
         let cx = cx.clone();
         let stream_handle = stream_handle.with_remote_addr(src_addr);
         inner_join_set.spawn(async move {
-            cx.handle_raw_request(message, Protocol::Udp, stream_handle, None)
+            cx.handle_raw_request(message, Protocol::Udp, stream_handle, None, false)
                 .await;
         });
 
@@ -510,6 +510,17 @@ async fn handle_udp(
         // TODO: let's consider capturing all the initial configuration details so that the socket could be recreated...
         Err(NetError::from("unexpected close of UDP socket"))
     }
+}
+
+/// Returns true when a peer connected without PROXY v2 (scanners, health probes, plain DNS).
+fn proxy_protocol_rejection_is_expected(error: &io::Error) -> bool {
+    matches!(
+        error.kind(),
+        io::ErrorKind::UnexpectedEof
+            | io::ErrorKind::InvalidData
+            | io::ErrorKind::ConnectionReset
+            | io::ErrorKind::ConnectionAborted
+    )
 }
 
 async fn handle_tcp(
@@ -539,18 +550,45 @@ async fn handle_tcp(
             },
         };
 
-        let (tcp_stream, src_addr, tenant_id) = if proxy_protocol {
+        let (tcp_stream, src_addr, tenant_id, trusted_proxy) = if proxy_protocol {
             let mut stream = tcp_stream;
             match crate::proxy_protocol::read_proxy_header(&mut stream).await {
-                Ok(Some(hdr)) => (stream, hdr.src, hdr.tenant_id),
-                Ok(None) => (stream, peer_addr, None),
+                Ok(Some(hdr)) => {
+                    if !cx.access.allow(peer_addr.ip()) {
+                        debug!(
+                            %peer_addr,
+                            "refused TCP connection from unauthorized PROXY peer"
+                        );
+                        continue;
+                    }
+                    (stream, hdr.src, hdr.tenant_id, true)
+                }
+                Ok(None) => {
+                    if !cx.access.allow(peer_addr.ip()) {
+                        debug!(%peer_addr, "refused TCP connection from unauthorized peer");
+                        continue;
+                    }
+                    (stream, peer_addr, None, false)
+                }
                 Err(error) => {
-                    warn!(%peer_addr, %error, "failed to parse PROXY protocol header");
+                    if proxy_protocol_rejection_is_expected(&error) {
+                        debug!(
+                            %peer_addr,
+                            %error,
+                            "rejected TCP connection without valid PROXY v2 header"
+                        );
+                    } else {
+                        warn!(%peer_addr, %error, "failed to parse PROXY protocol header");
+                    }
                     continue;
                 }
             }
         } else {
-            (tcp_stream, peer_addr, None)
+            if !cx.access.allow(peer_addr.ip()) {
+                debug!(%peer_addr, "refused TCP connection from unauthorized peer");
+                continue;
+            }
+            (tcp_stream, peer_addr, None, false)
         };
 
         // verify that the src address is safe for responses
@@ -586,6 +624,7 @@ async fn handle_tcp(
                     Protocol::Tcp,
                     stream_handle.clone(),
                     tenant_id.clone(),
+                    trusted_proxy,
                 )
                 .await;
             }
@@ -676,7 +715,7 @@ async fn handle_tls(
                     }
                 };
 
-                cx.handle_raw_request(message, Protocol::Tls, stream_handle.clone(), None)
+                cx.handle_raw_request(message, Protocol::Tls, stream_handle.clone(), None, false)
                     .await;
             }
         });
@@ -726,6 +765,7 @@ impl<T: RequestHandler> ServerContext<T> {
         protocol: Protocol,
         response_handler: BufDnsStreamHandle,
         tenant_id: Option<String>,
+        trusted_proxy: bool,
     ) {
         let (message, src_addr) = message.into_parts();
         let response_handler = ResponseHandle::new(src_addr, response_handler, protocol);
@@ -736,6 +776,7 @@ impl<T: RequestHandler> ServerContext<T> {
             protocol,
             response_handler,
             tenant_id,
+            trusted_proxy,
         )
         .await;
     }
@@ -747,6 +788,7 @@ impl<T: RequestHandler> ServerContext<T> {
         protocol: Protocol,
         response_handler: impl ResponseHandler,
         tenant_id: Option<String>,
+        trusted_proxy: bool,
     ) {
         let mut decoder = BinDecoder::new(&message_bytes);
         let Ok(header) = Header::read(&mut decoder) else {
@@ -792,7 +834,7 @@ impl<T: RequestHandler> ServerContext<T> {
             }
         };
 
-        if !self.access.allow(src_addr.ip()) {
+        if !trusted_proxy && !self.access.allow(src_addr.ip()) {
             info!(
                 "request:Refused src:{proto}://{addr}#{port}",
                 proto = protocol,

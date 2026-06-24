@@ -3,16 +3,16 @@
 ## Maintainer: RAHMAT AL ZAMI
 ##
 ## Topology:
-##   HAProxy (public :53) → Hickory (:5301 TCP + PROXY v2) → pipeline chain
+##   HAProxy (public :53 TCP/UDP) → Hickory (:53 TCP + PROXY v2, :53 UDP) → pipeline chain
 ##
 ## Query flow:
 ##   rate_limiter → tenant_rate_limiter → adblock → router → split → fastest → ttl_modifier
 ##
 
-# Listen on internal port for HAProxy backend (PROXY v2)
+# Listen on standard DNS port for HAProxy backends (TCP + PROXY v2, UDP)
 listen_addrs_ipv4 = ["0.0.0.0"]
-listen_port = 5301
-disable_udp = true
+listen_port = 53
+disable_udp = false
 disable_tls = true
 disable_quic = true
 proxy_protocol = true
@@ -20,8 +20,9 @@ proxy_protocol = true
 # Prometheus metrics (scraped by deploy/prometheus)
 prometheus_listen_addr = "0.0.0.0:9000"
 
-# Only accept queries from private/docker networks (HAProxy backends)
-allow_networks = ["10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "127.0.0.0/8"]
+# Restrict TCP peers (HAProxy/docker). PROXY v2 client IPs are not ACL'd.
+# Host-published UDP on Docker Desktop may use non-RFC1918 source IPs; test UDP from the compose network.
+allow_networks = ["10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "127.0.0.0/8", "192.168.65.0/24"]
 
 tls_cert = { path = "/config/certs/cert.pem", private_key = "/config/certs/cert_key.pem" }
 https_listen_port = 443

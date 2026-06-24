@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
-"""Send many DNS queries over TCP+PROXY v2 and summarize results."""
+"""Send many DNS queries over TCP via HAProxy (PROXY v2 is added by HAProxy)."""
 
+import argparse
 import socket
 import struct
 import sys
@@ -13,7 +14,7 @@ RCODES = {0: "NOERROR", 3: "NXDOMAIN", 5: "REFUSED", 2: "SERVFAIL"}
 
 def pp2_header(src_ip: str = "203.0.113.50", src_port: int = 54321) -> bytes:
     src, dst = socket.inet_aton(src_ip), socket.inet_aton("127.0.0.1")
-    payload = src + dst + struct.pack("!HH", src_port, 5301)
+    payload = src + dst + struct.pack("!HH", src_port, 53)
     return PP2_SIG + bytes([0x21, 0x11]) + struct.pack("!H", len(payload)) + payload
 
 
@@ -23,11 +24,12 @@ def build_query(name: str, qid: int) -> bytes:
     return struct.pack("!HHHHHH", qid & 0xFFFF, 0x0100, 1, 0, 0, 0) + qname + struct.pack("!HH", 1, 1)
 
 
-def one_query(host: str, port: int, name: str, qid: int) -> tuple[str, float]:
+def one_query(host: str, port: int, name: str, qid: int, send_proxy: bool = False) -> tuple[str, float]:
     t0 = time.perf_counter()
     try:
         sock = socket.create_connection((host, port), timeout=10)
-        sock.sendall(pp2_header())
+        if send_proxy:
+            sock.sendall(pp2_header())
         msg = build_query(name, qid)
         sock.sendall(struct.pack("!H", len(msg)) + msg)
         hdr = sock.recv(2)
@@ -64,10 +66,17 @@ def percentile(sorted_vals: list[float], p: float) -> float:
 
 
 def main():
-    host = sys.argv[1] if len(sys.argv) > 1 else "127.0.0.1"
-    port = int(sys.argv[2]) if len(sys.argv) > 2 else 5301
-    total = int(sys.argv[3]) if len(sys.argv) > 3 else 10000
-    workers = int(sys.argv[4]) if len(sys.argv) > 4 else 50
+    parser = argparse.ArgumentParser(description="TCP DNS load test via HAProxy")
+    parser.add_argument("host", nargs="?", default="127.0.0.1")
+    parser.add_argument("port", nargs="?", type=int, default=53)
+    parser.add_argument("total", nargs="?", type=int, default=10000)
+    parser.add_argument("workers", nargs="?", type=int, default=50)
+    parser.add_argument(
+        "--send-proxy",
+        action="store_true",
+        help="Send PROXY v2 header (direct Hickory testing only)",
+    )
+    args = parser.parse_args()
     names = ["google.com", "bkash.com", "wikipedia.org", "example.com"]
 
     counts: dict[str, int] = {}
@@ -75,10 +84,10 @@ def main():
     ok_latencies: list[float] = []
     start = time.perf_counter()
 
-    with ThreadPoolExecutor(max_workers=workers) as pool:
+    with ThreadPoolExecutor(max_workers=args.workers) as pool:
         futures = [
-            pool.submit(one_query, host, port, names[i % len(names)], i)
-            for i in range(total)
+            pool.submit(one_query, args.host, args.port, names[i % len(names)], i, args.send_proxy)
+            for i in range(args.total)
         ]
         for fut in as_completed(futures):
             result, latency_ms = fut.result()
@@ -88,16 +97,16 @@ def main():
                 ok_latencies.append(latency_ms)
 
     elapsed = time.perf_counter() - start
-    qps = total / elapsed if elapsed else 0
+    qps = args.total / elapsed if elapsed else 0
     latencies.sort()
     ok_latencies.sort()
     ok = counts.get("NOERROR", 0)
-    fail = total - ok
+    fail = args.total - ok
 
-    print(f"queries={total} elapsed={elapsed:.2f}s qps={qps:.0f} workers={workers}")
-    print(f"  success={ok} ({100*ok/total:.1f}%) fail={fail} ({100*fail/total:.1f}%)")
+    print(f"queries={args.total} elapsed={elapsed:.2f}s qps={qps:.0f} workers={args.workers}")
+    print(f"  success={ok} ({100*ok/args.total:.1f}%) fail={fail} ({100*fail/args.total:.1f}%)")
     for k in sorted(counts, key=lambda x: (-counts[x], x)):
-        print(f"  {k}: {counts[k]} ({100*counts[k]/total:.1f}%)")
+        print(f"  {k}: {counts[k]} ({100*counts[k]/args.total:.1f}%)")
     print(
         f"  latency_ms (all): min={latencies[0]:.1f} avg={sum(latencies)/len(latencies):.1f} "
         f"p50={percentile(latencies, 50):.1f} p95={percentile(latencies, 95):.1f} "

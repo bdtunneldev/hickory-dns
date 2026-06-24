@@ -86,7 +86,7 @@ if __name__ == "__main__":
     name = sys.argv[2]
     qtype = int(sys.argv[3]) if len(sys.argv) > 3 else 1
     if mode == "hickory":
-        r = dns_tcp_query("127.0.0.1", 5301, name, qtype, proxy=True)
+        r = dns_tcp_query("127.0.0.1", 53, name, qtype, proxy=True)
     elif mode == "bd":
         r = dns_tcp_query("103.187.22.195", 53, name, qtype, proxy=False)
     elif mode == "google":

@@ -10,7 +10,7 @@ use crate::{
 };
 
 /// Default NSEC response for pipeline middleware handlers.
-pub async fn unimplemented_nsec(
+pub(super) async fn unimplemented_nsec(
     _name: &LowerName,
     _lookup_options: LookupOptions,
 ) -> LookupControlFlow<AuthLookup> {
@@ -21,7 +21,7 @@ pub async fn unimplemented_nsec(
 
 /// Default NSEC3 response for pipeline middleware handlers.
 #[cfg(feature = "__dnssec")]
-pub async fn unimplemented_nsec3(
+pub(super) async fn unimplemented_nsec3(
     _info: crate::zone_handler::Nsec3QueryInfo<'_>,
     _lookup_options: LookupOptions,
 ) -> LookupControlFlow<AuthLookup> {

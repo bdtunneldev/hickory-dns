@@ -5,6 +5,7 @@ members = [
     "crates/proto",
     "crates/resolver",
     "crates/server",
+    "crates/sni-proxy",
     "bin",
     "util",
     "tests/integration-tests",

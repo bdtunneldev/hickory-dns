@@ -1,3 +1,8 @@
+# Pinned images (update deliberately, not :latest):
+#   hickory-dns     — built from Dockerfile (rust:1-alpine3.24 → alpine:3.24.1)
+#   haproxy         — haproxytech/haproxy-alpine:3.5
+#   prometheus      — prom/prometheus:v3.12.0
+
 x-hickory-dns-common: &hickory-dns-common
   build: .
   image: hickory-dns:latest
@@ -18,27 +23,27 @@ services:
   hickory-dns-1:
     <<: *hickory-dns-common
     ports:
-      - "5301:5301/tcp"
       - "9101:9000/tcp"
+      - "53:53/udp"
 
   hickory-dns-2:
     <<: *hickory-dns-common
     ports:
-      - "5302:5301/tcp"
       - "9102:9000/tcp"
 
   hickory-dns-3:
     <<: *hickory-dns-common
     ports:
-      - "5303:5301/tcp"
       - "9103:9000/tcp"
 
   haproxy:
-    image: haproxy:2.9-alpine
+    image: haproxytech/haproxy-alpine:3.5
     environment:
       TZ: Asia/Dhaka
+    cap_add:
+      - NET_BIND_SERVICE
     ports:
-      - "5353:53/tcp"
+      - "53:53/tcp"
     volumes:
       - ./config/haproxy.cfg:/usr/local/etc/haproxy/haproxy.cfg:ro
     depends_on:
@@ -51,7 +56,7 @@ services:
     restart: unless-stopped
 
   prometheus:
-    image: prom/prometheus:v2.54.1
+    image: prom/prometheus:v3.12.0
     environment:
       TZ: Asia/Dhaka
     ports:

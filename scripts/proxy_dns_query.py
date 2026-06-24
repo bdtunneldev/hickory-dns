@@ -1,9 +1,12 @@
 #!/usr/bin/env python3
-"""Send a DNS query over TCP with HAProxy PROXY protocol v2 header."""
+"""Send a DNS query over TCP (via HAProxy, which adds PROXY v2 to backends).
 
+Use --send-proxy when connecting directly to Hickory with your own PROXY header.
+"""
+
+import argparse
 import socket
 import struct
-import sys
 
 PP2_SIG = b"\r\n\r\n\0\r\nQUIT\n"
 
@@ -27,9 +30,17 @@ def build_query(name: str, qtype: int = 1) -> bytes:
     return struct.pack("!HHHHHH", 0x1234, 0x0100, 1, 0, 0, 0) + qname + struct.pack("!HH", qtype, 1)
 
 
-def query(host: str, port: int, name: str, qtype: int = 1, tenant: str | None = None) -> bytes:
+def query(
+    host: str,
+    port: int,
+    name: str,
+    qtype: int = 1,
+    tenant: str | None = None,
+    send_proxy: bool = False,
+) -> bytes:
     sock = socket.create_connection((host, port), timeout=10)
-    sock.sendall(build_pp2_v4("203.0.113.50", 54321, "127.0.0.1", port, tenant))
+    if send_proxy:
+        sock.sendall(build_pp2_v4("203.0.113.50", 54321, "127.0.0.1", port, tenant))
     msg = build_query(name, qtype)
     sock.sendall(struct.pack("!H", len(msg)) + msg)
     ln = struct.unpack("!H", sock.recv(2))[0]
@@ -72,10 +83,17 @@ def parse_answer(data: bytes) -> str:
 
 
 if __name__ == "__main__":
-    host = sys.argv[1] if len(sys.argv) > 1 else "127.0.0.1"
-    port = int(sys.argv[2]) if len(sys.argv) > 2 else 5301
-    name = sys.argv[3]
-    qtype = int(sys.argv[4]) if len(sys.argv) > 4 else 1
-    tenant = sys.argv[5] if len(sys.argv) > 5 else None
-    resp = query(host, port, name, qtype, tenant)
-    print(f"{name}: {parse_answer(resp)}")
+    parser = argparse.ArgumentParser(description="DNS over TCP (HAProxy adds PROXY v2 by default)")
+    parser.add_argument("host", nargs="?", default="127.0.0.1")
+    parser.add_argument("port", nargs="?", type=int, default=53)
+    parser.add_argument("name")
+    parser.add_argument("qtype", nargs="?", type=int, default=1)
+    parser.add_argument("tenant", nargs="?", default=None)
+    parser.add_argument(
+        "--send-proxy",
+        action="store_true",
+        help="Send PROXY v2 header (direct Hickory testing only)",
+    )
+    args = parser.parse_args()
+    resp = query(args.host, args.port, args.name, args.qtype, args.tenant, args.send_proxy)
+    print(f"{args.name}: {parse_answer(resp)}")

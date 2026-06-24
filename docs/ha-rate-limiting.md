@@ -5,7 +5,7 @@ How per-IP and per-tenant rate limits behave when running multiple Hickory DNS i
 ## Topology
 
 ```
-Clients → HAProxy (:53, send-proxy-v2) → round-robin → hickory-dns-{1,2,3} (:5301)
+Clients → HAProxy (:53 TCP/UDP) → round-robin → hickory-dns-{1,2,3} (:53)
 ```
 
 Each Hickory instance maintains **in-memory, per-process** counters. Limits are **not** shared via Redis/Valkey (unlike some RouteDNS deployments).
