@@ -1,11 +1,66 @@
+x-hickory-dns-common: &hickory-dns-common
+  build: .
+  image: hickory-dns:latest
+  volumes:
+    - ./config:/config
+  environment:
+    TZ: Asia/Dhaka
+  restart: unless-stopped
+  command: -c /config/routedns-pipeline.toml -z /config/
+  healthcheck:
+    test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:9000/metrics"]
+    interval: 30s
+    timeout: 5s
+    retries: 3
+    start_period: 20s
+
 services:
-  hickory-dns:
-    build: .
-    image: hickory-dns:latest
+  hickory-dns-1:
+    <<: *hickory-dns-common
     ports:
       - "5301:5301/tcp"
-      - "443:443"
+      - "9101:9000/tcp"
+
+  hickory-dns-2:
+    <<: *hickory-dns-common
+    ports:
+      - "5302:5301/tcp"
+      - "9102:9000/tcp"
+
+  hickory-dns-3:
+    <<: *hickory-dns-common
+    ports:
+      - "5303:5301/tcp"
+      - "9103:9000/tcp"
+
+  haproxy:
+    image: haproxy:2.9-alpine
+    environment:
+      TZ: Asia/Dhaka
+    ports:
+      - "5353:53/tcp"
     volumes:
-      - ./config:/config
+      - ./config/haproxy.cfg:/usr/local/etc/haproxy/haproxy.cfg:ro
+    depends_on:
+      hickory-dns-1:
+        condition: service_healthy
+      hickory-dns-2:
+        condition: service_healthy
+      hickory-dns-3:
+        condition: service_healthy
     restart: unless-stopped
-    command: -c /config/routedns-pipeline.toml -z /config/
+
+  prometheus:
+    image: prom/prometheus:v2.54.1
+    environment:
+      TZ: Asia/Dhaka
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./deploy/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./deploy/prometheus/alerts.yml:/etc/prometheus/alerts.yml:ro
+    depends_on:
+      - hickory-dns-1
+      - hickory-dns-2
+      - hickory-dns-3
+    restart: unless-stopped

@@ -1,0 +1,16 @@
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+
+rule_files:
+  - /etc/prometheus/alerts.yml
+
+scrape_configs:
+  - job_name: hickory-dns
+    static_configs:
+      - targets:
+          - hickory-dns-1:9000
+          - hickory-dns-2:9000
+          - hickory-dns-3:9000
+        labels:
+          cluster: routedns-pipeline

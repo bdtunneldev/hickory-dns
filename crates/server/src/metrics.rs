@@ -817,3 +817,99 @@ pub mod blocklist {
     #[cfg(feature = "blocklist")]
     pub const QUERIES_TOTAL: &str = "hickory_blocklist_queries_total";
 }
+
+/// Pipeline middleware metrics (rate limiting, upstream racing).
+#[cfg(all(feature = "pipeline", feature = "metrics"))]
+pub mod pipeline {
+    use metrics::{Counter, Unit, counter, describe_counter};
+
+    /// Rejected queries due to per-IP rate limiting.
+    pub const RATE_LIMIT_REJECTED_TOTAL: &str = "hickory_pipeline_rate_limit_rejected_total";
+
+    /// Rejected queries due to per-tenant rate limiting.
+    pub const TENANT_RATE_LIMIT_REJECTED_TOTAL: &str =
+        "hickory_pipeline_tenant_rate_limit_rejected_total";
+
+    /// Upstream resolver errors observed by the fastest handler.
+    pub const UPSTREAM_ERRORS_TOTAL: &str = "hickory_pipeline_upstream_errors_total";
+
+    pub(crate) struct RateLimiterMetrics {
+        pub rejected: Counter,
+    }
+
+    impl RateLimiterMetrics {
+        pub(crate) fn new() -> Self {
+            describe_counter!(
+                RATE_LIMIT_REJECTED_TOTAL,
+                Unit::Count,
+                "Queries rejected by the per-IP rate limiter",
+            );
+            Self {
+                rejected: counter!(RATE_LIMIT_REJECTED_TOTAL),
+            }
+        }
+    }
+
+    pub(crate) struct TenantRateLimiterMetrics {
+        pub rejected: Counter,
+    }
+
+    impl TenantRateLimiterMetrics {
+        pub(crate) fn new() -> Self {
+            describe_counter!(
+                TENANT_RATE_LIMIT_REJECTED_TOTAL,
+                Unit::Count,
+                "Queries rejected by the per-tenant rate limiter",
+            );
+            Self {
+                rejected: counter!(TENANT_RATE_LIMIT_REJECTED_TOTAL),
+            }
+        }
+    }
+
+    pub(crate) struct FastestMetrics {
+        pub upstream_errors: Counter,
+    }
+
+    impl FastestMetrics {
+        pub(crate) fn new() -> Self {
+            describe_counter!(
+                UPSTREAM_ERRORS_TOTAL,
+                Unit::Count,
+                "Upstream resolver errors from the fastest handler",
+            );
+            Self {
+                upstream_errors: counter!(UPSTREAM_ERRORS_TOTAL),
+            }
+        }
+    }
+}
+
+/// Remote domain/blocklist refresh metrics (blocklist store and split handler).
+#[cfg(feature = "metrics")]
+pub mod remote_list {
+    use metrics::{Unit, counter, describe_counter};
+
+    /// Remote list refresh attempts by handler, source, and result.
+    pub const REFRESH_TOTAL: &str = "hickory_remote_list_refresh_total";
+
+    /// Record a remote list refresh attempt.
+    pub fn record_refresh(handler: &str, source: &str, success: bool) {
+        static DESCRIBED: std::sync::Once = std::sync::Once::new();
+        DESCRIBED.call_once(|| {
+            describe_counter!(
+                REFRESH_TOTAL,
+                Unit::Count,
+                "Remote blocklist or split-domain list refresh attempts",
+            );
+        });
+        let result = if success { "success" } else { "failure" };
+        counter!(
+            REFRESH_TOTAL,
+            "handler" => handler.to_owned(),
+            "source" => source.to_owned(),
+            "result" => result
+        )
+        .increment(1);
+    }
+}

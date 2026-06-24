@@ -16,7 +16,7 @@ COPY . .
 # Build the hickory-dns binary
 # We explicitly enable features for a full-featured server
 # release profile is used for optimization
-RUN cargo build --release --bin hickory-dns --features sqlite,resolver,recursor,blocklist,pipeline,remote-blocklist,dnssec-ring,https-ring,tls-ring,quic-ring
+RUN cargo build --release --bin hickory-dns --features sqlite,resolver,recursor,blocklist,pipeline,remote-blocklist,dnssec-ring,https-ring,tls-ring,quic-ring,prometheus-metrics,metrics
 
 # Runtime stage
 FROM alpine:latest
@@ -24,7 +24,9 @@ FROM alpine:latest
 # Install runtime dependencies
 # ca-certificates: for TLS validation
 # openssl: library support
-RUN apk add --no-cache ca-certificates openssl
+RUN apk add --no-cache ca-certificates openssl wget tzdata
+
+ENV TZ=Asia/Dhaka
 
 # Create a non-root user for security (optional but recommended, though user didn't explicitly ask, good practice)
 # But for simplicity and standard port usage (53 requires root or capabilities), we'll stick to root or user can configure.
@@ -39,7 +41,7 @@ COPY --from=builder /app/target/release/hickory-dns .
 RUN mkdir -p /config
 
 # Expose pipeline defaults: HAProxy backend (PROXY v2) and DoH admin
-EXPOSE 5301/tcp 443/tcp
+EXPOSE 5301/tcp 443/tcp 9000/tcp
 
 # Set volume for persistence/config if needed
 VOLUME ["/config"]

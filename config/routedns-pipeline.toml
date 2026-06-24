@@ -17,6 +17,12 @@ disable_tls = true
 disable_quic = true
 proxy_protocol = true
 
+# Prometheus metrics (scraped by deploy/prometheus)
+prometheus_listen_addr = "0.0.0.0:9000"
+
+# Only accept queries from private/docker networks (HAProxy backends)
+allow_networks = ["10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "127.0.0.0/8"]
+
 tls_cert = { path = "/config/certs/cert.pem", private_key = "/config/certs/cert_key.pem" }
 https_listen_port = 443
 
@@ -55,6 +61,7 @@ wildcard_match = true
 min_wildcard_depth = 2
 sinkhole_ipv4 = "0.0.0.0"
 lists = ["default/blocklist.txt"]
+blocklist_refresh = 3600
 sources = [
   { source = "https://raw.githubusercontent.com/StevenBlack/hosts/master/hosts", allow_failure = true },
 ]

@@ -49,14 +49,14 @@ use hickory_server::dnssec::NxProofKind;
 use hickory_server::net::runtime::TokioRuntimeProvider;
 #[cfg(feature = "blocklist")]
 use hickory_server::store::blocklist::{BlocklistConfig, BlocklistZoneHandler};
+#[cfg(feature = "resolver")]
+use hickory_server::store::forwarder::{ForwardConfig, ForwardZoneHandler};
 #[cfg(feature = "pipeline")]
 use hickory_server::store::pipeline::{
     FastestConfig, FastestZoneHandler, RateLimiterConfig, RateLimiterZoneHandler, RouterConfig,
     RouterZoneHandler, SplitConfig, SplitZoneHandler, TenantRateLimiterConfig,
     TenantRateLimiterZoneHandler, TtlModifierConfig, TtlModifierZoneHandler,
 };
-#[cfg(feature = "resolver")]
-use hickory_server::store::forwarder::{ForwardConfig, ForwardZoneHandler};
 #[cfg(feature = "recursor")]
 use hickory_server::store::recursor::RecursiveZoneHandler;
 #[cfg(feature = "sqlite")]
@@ -446,12 +446,12 @@ impl ZoneConfig {
                             RateLimiterZoneHandler::try_from_config(zone_name.clone(), config)?,
                         ),
                         #[cfg(feature = "pipeline")]
-                        ExternalStoreConfig::TenantRateLimiter(config) => Arc::new(
-                            TenantRateLimiterZoneHandler::try_from_config(
+                        ExternalStoreConfig::TenantRateLimiter(config) => {
+                            Arc::new(TenantRateLimiterZoneHandler::try_from_config(
                                 zone_name.clone(),
                                 config,
-                            )?,
-                        ),
+                            )?)
+                        }
                         #[cfg(feature = "pipeline")]
                         ExternalStoreConfig::Router(config) => Arc::new(
                             RouterZoneHandler::try_from_config(zone_name.clone(), config)?,

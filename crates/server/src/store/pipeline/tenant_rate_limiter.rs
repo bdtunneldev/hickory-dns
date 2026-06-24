@@ -15,6 +15,9 @@ use std::{
 use serde::Deserialize;
 use tracing::debug;
 
+#[cfg(all(feature = "metrics", feature = "pipeline"))]
+use crate::metrics::pipeline::TenantRateLimiterMetrics;
+
 use crate::{
     proto::{
         op::ResponseCode,
@@ -56,6 +59,8 @@ pub struct TenantRateLimiterZoneHandler {
     origin: LowerName,
     config: TenantRateLimiterConfig,
     state: Arc<Mutex<CounterState>>,
+    #[cfg(all(feature = "metrics", feature = "pipeline"))]
+    metrics: TenantRateLimiterMetrics,
 }
 
 impl TenantRateLimiterZoneHandler {
@@ -68,6 +73,8 @@ impl TenantRateLimiterZoneHandler {
                 window_id: 0,
                 counts: HashMap::new(),
             })),
+            #[cfg(all(feature = "metrics", feature = "pipeline"))]
+            metrics: TenantRateLimiterMetrics::new(),
         })
     }
 
@@ -78,7 +85,10 @@ impl TenantRateLimiterZoneHandler {
             .as_secs();
         let window_id = now / self.config.window.max(1);
 
-        let mut state = self.state.lock().expect("tenant rate limiter lock poisoned");
+        let mut state = self
+            .state
+            .lock()
+            .expect("tenant rate limiter lock poisoned");
         if state.window_id != window_id {
             state.window_id = window_id;
             state.counts.clear();
@@ -127,6 +137,8 @@ impl ZoneHandler for TenantRateLimiterZoneHandler {
             LookupControlFlow::Skip
         } else {
             debug!(%tenant_id, "tenant rate limit exceeded");
+            #[cfg(all(feature = "metrics", feature = "pipeline"))]
+            self.metrics.rejected.increment(1);
             LookupControlFlow::Break(Err(LookupError::ResponseCode(ResponseCode::Refused)))
         }
     }

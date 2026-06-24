@@ -140,6 +140,11 @@ rustdoc-args = ["--cfg", "docsrs"]
 [lints]
 workspace = true
 
+[[test]]
+name = "pipeline_chain"
+path = "tests/pipeline_chain.rs"
+required-features = ["pipeline", "blocklist", "resolver", "metrics"]
+
 [package.metadata.cargo-all-features]
 skip_optional_dependencies = true
 max_combination_size = 2

@@ -1,0 +1,63 @@
+groups:
+  - name: hickory_dns_pipeline
+    rules:
+      - alert: HickoryRateLimitSpike
+        expr: rate(hickory_pipeline_rate_limit_rejected_total[5m]) > 10
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: High per-IP rate limit rejections
+          description: >-
+            Instance {{ $labels.instance }} is rejecting more than 10 queries/s
+            due to per-IP rate limits.
+
+      - alert: HickoryTenantRateLimitSpike
+        expr: rate(hickory_pipeline_tenant_rate_limit_rejected_total[5m]) > 10
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: High tenant rate limit rejections
+          description: >-
+            Instance {{ $labels.instance }} is rejecting tenant traffic above threshold.
+
+      - alert: HickoryUpstreamErrors
+        expr: rate(hickory_pipeline_upstream_errors_total[5m]) > 5
+        for: 3m
+        labels:
+          severity: critical
+        annotations:
+          summary: Upstream resolver errors elevated
+          description: >-
+            Fastest-handler upstream errors exceed 5/s on {{ $labels.instance }}.
+
+      - alert: HickoryRemoteListRefreshFailures
+        expr: increase(hickory_remote_list_refresh_total{result="failure"}[15m]) > 0
+        for: 0m
+        labels:
+          severity: warning
+        annotations:
+          summary: Remote list refresh failed
+          description: >-
+            Handler {{ $labels.handler }} source {{ $labels.source }} failed refresh
+            on {{ $labels.instance }}.
+
+      - alert: HickoryBlocklistEntriesLow
+        expr: hickory_blocklist_list_entries_total < 1
+        for: 10m
+        labels:
+          severity: critical
+        annotations:
+          summary: Blocklist appears empty
+          description: >-
+            Blocklist entry count is zero on {{ $labels.instance }} for 10 minutes.
+
+      - alert: HickoryTargetDown
+        expr: up{job="hickory-dns"} == 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: Hickory DNS metrics target down
+          description: Prometheus cannot scrape {{ $labels.instance }}.

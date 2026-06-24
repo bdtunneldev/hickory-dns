@@ -16,6 +16,9 @@ use std::{
 use serde::Deserialize;
 use tracing::debug;
 
+#[cfg(all(feature = "metrics", feature = "pipeline"))]
+use crate::metrics::pipeline::RateLimiterMetrics;
+
 use crate::{
     proto::{
         op::ResponseCode,
@@ -72,6 +75,8 @@ pub struct RateLimiterZoneHandler {
     origin: LowerName,
     config: RateLimiterConfig,
     state: Arc<Mutex<CounterState>>,
+    #[cfg(all(feature = "metrics", feature = "pipeline"))]
+    metrics: RateLimiterMetrics,
 }
 
 impl RateLimiterZoneHandler {
@@ -84,6 +89,8 @@ impl RateLimiterZoneHandler {
                 window_id: 0,
                 counts: HashMap::new(),
             })),
+            #[cfg(all(feature = "metrics", feature = "pipeline"))]
+            metrics: RateLimiterMetrics::new(),
         })
     }
 
@@ -169,6 +176,8 @@ impl ZoneHandler for RateLimiterZoneHandler {
             LookupControlFlow::Skip
         } else {
             debug!(ip = %info.src.ip(), "rate limit exceeded");
+            #[cfg(all(feature = "metrics", feature = "pipeline"))]
+            self.metrics.rejected.increment(1);
             LookupControlFlow::Break(Err(LookupError::ResponseCode(ResponseCode::Refused)))
         }
     }
@@ -197,5 +206,70 @@ impl ZoneHandler for RateLimiterZoneHandler {
     #[cfg(feature = "__dnssec")]
     fn nx_proof_kind(&self) -> Option<&crate::dnssec::NxProofKind> {
         None
+    }
+}
+
+#[cfg(all(test, feature = "pipeline"))]
+mod tests {
+    use std::net::{IpAddr, Ipv4Addr, SocketAddr};
+    use std::str::FromStr;
+
+    use hickory_proto::op::{LowerQuery, MessageType, Metadata, OpCode, Query};
+    use hickory_proto::rr::{LowerName, Name, RecordType};
+
+    use super::*;
+    use crate::net::xfer::Protocol;
+    use crate::server::RequestInfo;
+    use crate::zone_handler::{LookupControlFlow, LookupOptions, ZoneHandler};
+
+    fn request_info(ip: Ipv4Addr) -> RequestInfo<'static> {
+        let query = Query::new(Name::from_str("example.com.").unwrap(), RecordType::A);
+        let metadata = Box::leak(Box::new(Metadata::new(
+            1,
+            MessageType::Query,
+            OpCode::Query,
+        )));
+        let lower_query = Box::leak(Box::new(LowerQuery::from(query)));
+        RequestInfo::new(
+            SocketAddr::new(IpAddr::V4(ip), 12345),
+            Protocol::Tcp,
+            metadata,
+            lower_query,
+        )
+    }
+
+    #[tokio::test]
+    async fn rate_limiter_allows_then_refuses() {
+        let handler = RateLimiterZoneHandler::try_from_config(
+            Name::root(),
+            RateLimiterConfig {
+                requests: 2,
+                window: 60,
+                prefix4: 32,
+                prefix6: 128,
+            },
+        )
+        .unwrap();
+
+        let info = request_info(Ipv4Addr::new(203, 0, 113, 50));
+        let name = LowerName::from(Name::from_str("example.com.").unwrap());
+
+        for _ in 0..2 {
+            match handler
+                .lookup(&name, RecordType::A, Some(&info), LookupOptions::default())
+                .await
+            {
+                LookupControlFlow::Skip => {}
+                _ => panic!("expected skip under limit"),
+            }
+        }
+
+        match handler
+            .lookup(&name, RecordType::A, Some(&info), LookupOptions::default())
+            .await
+        {
+            LookupControlFlow::Break(Err(LookupError::ResponseCode(ResponseCode::Refused))) => {}
+            _ => panic!("expected refused over limit"),
+        }
     }
 }

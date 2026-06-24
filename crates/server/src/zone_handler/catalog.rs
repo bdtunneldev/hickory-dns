@@ -1149,6 +1149,17 @@ async fn build_forwarded_response(
                 )
             }
         }
+        Err(LookupError::ResponseCode(
+            rcode @ ResponseCode::Refused | rcode @ ResponseCode::NotAuth,
+        )) => {
+            response_meta.response_code = rcode;
+            debug!(?rcode, "forwarded lookup returned response code");
+            (
+                Answer::Normal(AuthLookup::default()),
+                AuthLookup::default(),
+                AuthLookup::default(),
+            )
+        }
         Err(e) => {
             response_meta.response_code = ResponseCode::ServFail;
             debug!(error = ?e, "error resolving");
@@ -1318,13 +1329,32 @@ mod tests {
             authorities_count
         );
 
-        // Check that we have additionals
         let additionals_count = message.additionals.len();
         assert!(
             additionals_count > 0,
             "Additionals section should not be empty, got {} records",
             additionals_count
         );
+    }
+
+    #[tokio::test]
+    async fn test_build_forwarded_response_preserves_refused() {
+        let query = Query::new(Name::from_str("example.com.").unwrap(), RecordType::A);
+        let mut request_meta = Metadata::new(1234, MessageType::Query, OpCode::Query);
+        request_meta.recursion_desired = true;
+        let query_lower = LowerQuery::from(query);
+
+        let message = build_forwarded_response(
+            Err(LookupError::ResponseCode(ResponseCode::Refused)),
+            &request_meta,
+            #[cfg(feature = "__dnssec")]
+            false,
+            &query_lower,
+            LookupOptions::default(),
+        )
+        .await;
+
+        assert_eq!(message.metadata.response_code, ResponseCode::Refused);
     }
 
     #[tokio::test]

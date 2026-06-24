@@ -14,16 +14,21 @@ use std::{
     fs::File,
     io::{self, Read},
     net::{Ipv4Addr, Ipv6Addr},
-    path::Path,
+    path::{Path, PathBuf},
     str::FromStr,
+    sync::Arc,
     time::{Duration, Instant},
 };
+
+use std::sync::RwLock;
 
 use serde::Deserialize;
 use tracing::{info, trace, warn};
 
 #[cfg(feature = "metrics")]
 use crate::metrics::blocklist::BlocklistMetrics;
+#[cfg(feature = "metrics")]
+use crate::metrics::remote_list;
 #[cfg(feature = "__dnssec")]
 use crate::{dnssec::NxProofKind, zone_handler::Nsec3QueryInfo};
 use crate::{
@@ -65,7 +70,7 @@ use crate::{
 /// to drop queries pre-emptively, as in the first example.
 pub struct BlocklistZoneHandler {
     origin: LowerName,
-    blocklist: HashSet<LowerName>,
+    blocklist: Arc<RwLock<HashSet<LowerName>>>,
     wildcard_match: bool,
     min_wildcard_depth: u8,
     sinkhole_ipv4: Ipv4Addr,
@@ -74,6 +79,10 @@ pub struct BlocklistZoneHandler {
     block_message: Option<String>,
     consult_action: BlocklistConsultAction,
     log_clients: bool,
+    lists: Vec<String>,
+    sources: Vec<RemoteBlocklistSource>,
+    refresh: u64,
+    zone_dir: PathBuf,
     #[cfg(feature = "metrics")]
     metrics: BlocklistMetrics,
 }
@@ -87,9 +96,16 @@ impl BlocklistZoneHandler {
     ) -> Result<Self, String> {
         info!("loading blocklist config: {origin}");
 
-        let mut handler = Self {
+        let base_dir = match base_dir {
+            Some(dir) => dir,
+            None => {
+                return Err("invalid blocklist (zone directory) base path specified".to_string());
+            }
+        };
+
+        let handler = Self {
             origin: origin.into(),
-            blocklist: HashSet::new(),
+            blocklist: Arc::new(RwLock::new(HashSet::new())),
             wildcard_match: config.wildcard_match,
             min_wildcard_depth: config.min_wildcard_depth,
             sinkhole_ipv4: config.sinkhole_ipv4.unwrap_or(Ipv4Addr::UNSPECIFIED),
@@ -98,35 +114,34 @@ impl BlocklistZoneHandler {
             block_message: config.block_message,
             consult_action: config.consult_action,
             log_clients: config.log_clients,
+            lists: config.lists.clone(),
+            sources: config.sources.clone(),
+            refresh: config.blocklist_refresh,
+            zone_dir: base_dir.to_path_buf(),
             #[cfg(feature = "metrics")]
             metrics: BlocklistMetrics::new(),
-        };
-
-        let base_dir = match base_dir {
-            Some(dir) => dir.display(),
-            None => {
-                return Err(format!(
-                    "invalid blocklist (zone directory) base path specified: '{base_dir:?}'"
-                ));
-            }
         };
 
         // Load block lists into the block table cache for this zone handler.
         for bl in &config.lists {
             info!("adding blocklist {bl}");
 
-            let file = match File::open(format!("{base_dir}/{bl}")) {
+            let file = match File::open(base_dir.join(bl)) {
                 Ok(file) => file,
                 Err(e) => {
                     return Err(format!(
-                        "unable to open blocklist file {base_dir}/{bl}: {e:?}"
+                        "unable to open blocklist file {}/{}: {e:?}",
+                        base_dir.display(),
+                        bl
                     ));
                 }
             };
 
             if let Err(e) = handler.add(file) {
                 return Err(format!(
-                    "unable to add data from blocklist {base_dir}/{bl}: {e:?}"
+                    "unable to add data from blocklist {}/{}: {e:?}",
+                    base_dir.display(),
+                    bl
                 ));
             }
         }
@@ -136,23 +151,135 @@ impl BlocklistZoneHandler {
             match fetch_remote_blocklist(source) {
                 Ok(content) => {
                     if let Err(e) = handler.add(io::Cursor::new(content)) {
+                        #[cfg(feature = "metrics")]
+                        remote_list::record_refresh("blocklist", &source.source, false);
                         return Err(format!(
                             "unable to add data from remote blocklist {}: {e:?}",
                             source.source
                         ));
                     }
+                    #[cfg(feature = "metrics")]
+                    remote_list::record_refresh("blocklist", &source.source, true);
                 }
                 Err(e) if source.allow_failure => {
                     warn!("remote blocklist {} failed: {e}", source.source);
+                    #[cfg(feature = "metrics")]
+                    remote_list::record_refresh("blocklist", &source.source, false);
                 }
-                Err(e) => return Err(format!("remote blocklist {} failed: {e}", source.source)),
+                Err(e) => {
+                    #[cfg(feature = "metrics")]
+                    remote_list::record_refresh("blocklist", &source.source, false);
+                    return Err(format!("remote blocklist {} failed: {e}", source.source));
+                }
             }
         }
 
         #[cfg(feature = "metrics")]
-        handler.metrics.entries.set(handler.blocklist.len() as f64);
+        handler.metrics.entries.set(handler.entry_count() as f64);
+
+        if handler.refresh > 0 && !handler.sources.is_empty() {
+            handler.spawn_refresh_task();
+        }
 
         Ok(handler)
+    }
+
+    fn spawn_refresh_task(&self) {
+        let blocklist = Arc::clone(&self.blocklist);
+        let lists = self.lists.clone();
+        let sources = self.sources.clone();
+        let zone_dir = self.zone_dir.clone();
+        let refresh = self.refresh;
+        #[cfg(feature = "metrics")]
+        let entries_gauge = self.metrics.entries.clone();
+
+        tokio::spawn(async move {
+            let interval = Duration::from_secs(refresh);
+            loop {
+                tokio::time::sleep(interval).await;
+                match Self::reload_blocklist(&blocklist, &lists, &sources, &zone_dir).await {
+                    Ok(count) => {
+                        info!("blocklist refreshed with {count} entries");
+                        #[cfg(feature = "metrics")]
+                        entries_gauge.set(count as f64);
+                    }
+                    Err(e) => {
+                        warn!("blocklist refresh failed: {e}");
+                    }
+                }
+            }
+        });
+    }
+
+    async fn reload_blocklist(
+        blocklist: &Arc<RwLock<HashSet<LowerName>>>,
+        lists: &[String],
+        sources: &[RemoteBlocklistSource],
+        zone_dir: &Path,
+    ) -> Result<usize, String> {
+        let mut set = HashSet::new();
+
+        for bl in lists {
+            let file = File::open(zone_dir.join(bl))
+                .map_err(|e| format!("unable to open blocklist file {bl}: {e:?}"))?;
+            Self::load_into_set(&mut set, file)
+                .map_err(|e| format!("unable to add blocklist {bl}: {e:?}"))?;
+        }
+
+        for source in sources {
+            match fetch_remote_blocklist(source) {
+                Ok(content) => {
+                    Self::load_into_set(&mut set, io::Cursor::new(content)).map_err(|e| {
+                        format!("unable to add remote blocklist {}: {e:?}", source.source)
+                    })?;
+                    #[cfg(feature = "metrics")]
+                    remote_list::record_refresh("blocklist", &source.source, true);
+                }
+                Err(e) if source.allow_failure => {
+                    warn!(
+                        "remote blocklist {} failed during refresh: {e}",
+                        source.source
+                    );
+                    #[cfg(feature = "metrics")]
+                    remote_list::record_refresh("blocklist", &source.source, false);
+                }
+                Err(e) => {
+                    #[cfg(feature = "metrics")]
+                    remote_list::record_refresh("blocklist", &source.source, false);
+                    return Err(format!("remote blocklist {} failed: {e}", source.source));
+                }
+            }
+        }
+
+        let count = set.len();
+        *blocklist
+            .write()
+            .map_err(|e| format!("blocklist lock poisoned: {e}"))? = set;
+        Ok(count)
+    }
+
+    fn load_into_set(set: &mut HashSet<LowerName>, mut handle: impl Read) -> Result<(), io::Error> {
+        let mut contents = String::new();
+        handle.read_to_string(&mut contents)?;
+        for mut entry in contents.lines() {
+            if let Some((item, _)) = entry.split_once('#') {
+                entry = item.trim();
+            }
+            if entry.is_empty() {
+                continue;
+            }
+            let name = match entry.split_once(' ') {
+                Some((ip, domain)) if ip.trim() == "0.0.0.0" && !domain.trim().is_empty() => domain,
+                Some(_) => continue,
+                None => entry,
+            };
+            let Ok(mut name) = Name::from_str(name) else {
+                continue;
+            };
+            name.set_fqdn(true);
+            set.insert(name.into());
+        }
+        Ok(())
     }
 
     /// Add the contents of a block list to the in-memory cache. This function is normally called
@@ -231,47 +358,20 @@ impl BlocklistZoneHandler {
     ///     };
     /// }
     /// ```
-    pub fn add(&mut self, mut handle: impl Read) -> Result<(), io::Error> {
-        let mut contents = String::new();
-
-        handle.read_to_string(&mut contents)?;
-        for mut entry in contents.lines() {
-            // Strip comments
-            if let Some((item, _)) = entry.split_once('#') {
-                entry = item.trim();
-            }
-
-            if entry.is_empty() {
-                continue;
-            }
-
-            let name = match entry.split_once(' ') {
-                Some((ip, domain)) if ip.trim() == "0.0.0.0" && !domain.trim().is_empty() => domain,
-                Some(_) => {
-                    warn!("invalid blocklist entry '{entry}'; skipping entry");
-                    continue;
-                }
-                None => entry,
-            };
-
-            let Ok(mut name) = Name::from_str(name) else {
-                warn!("unable to parse Name for blocklist entry '{name}'; skipping entry");
-                continue;
-            };
-
-            trace!("inserting blocklist entry {name}");
-
-            name.set_fqdn(true);
-            let lower_name = LowerName::from(name);
-            self.blocklist.insert(lower_name);
-        }
-
+    pub fn add(&self, handle: impl Read) -> Result<(), io::Error> {
+        let mut set = HashSet::new();
+        Self::load_into_set(&mut set, handle)?;
+        let mut guard = self
+            .blocklist
+            .write()
+            .map_err(|e| io::Error::other(format!("blocklist lock poisoned: {e}")))?;
+        guard.extend(set);
         Ok(())
     }
 
     /// Number of unique blocklist entries currently loaded in memory.
     pub fn entry_count(&self) -> usize {
-        self.blocklist.len()
+        self.blocklist.read().map(|guard| guard.len()).unwrap_or(0)
     }
 
     /// Build a wildcard match list for a given host
@@ -299,9 +399,12 @@ impl BlocklistZoneHandler {
 
         trace!("blocklist match list: {match_list:?}");
 
-        match_list
-            .iter()
-            .any(|entry| self.blocklist.contains(entry))
+        match_list.iter().any(|entry| {
+            self.blocklist
+                .read()
+                .map(|guard| guard.contains(entry))
+                .unwrap_or(false)
+        })
     }
 
     /// Generate a BlocklistLookup to return on a blocklist match.  This will return a lookup with
@@ -537,6 +640,10 @@ pub struct BlocklistConfig {
     #[serde(default)]
     pub sources: Vec<RemoteBlocklistSource>,
 
+    /// Periodic refresh interval for remote blocklist sources in seconds (0 = startup only).
+    #[serde(default)]
+    pub blocklist_refresh: u64,
+
     /// IPv4 sinkhole IP. This is the IP that is returned when a blocklist entry is matched for an
     /// A query. If unspecified, an implementation-provided default will be used.
     pub sinkhole_ipv4: Option<Ipv4Addr>,
@@ -571,6 +678,7 @@ impl Default for BlocklistConfig {
             min_wildcard_depth: 2,
             lists: vec![],
             sources: vec![],
+            blocklist_refresh: 0,
             sinkhole_ipv4: None,
             sinkhole_ipv6: None,
             ttl: 86_400,
@@ -633,6 +741,7 @@ mod test {
             ttl: 86_400,
             consult_action: BlocklistConsultAction::Disabled,
             log_clients: true,
+            ..Default::default()
         };
 
         let h = handler(config);
@@ -679,6 +788,7 @@ mod test {
             ttl: 86_400,
             consult_action: BlocklistConsultAction::Disabled,
             log_clients: true,
+            ..Default::default()
         };
 
         let msg = config.block_message.clone();
@@ -714,6 +824,7 @@ mod test {
             ttl: 86_400,
             consult_action: BlocklistConsultAction::Disabled,
             log_clients: true,
+            ..Default::default()
         };
 
         let h = handler(config);
@@ -746,6 +857,7 @@ mod test {
             ttl: 86_400,
             consult_action: BlocklistConsultAction::Disabled,
             log_clients: true,
+            ..Default::default()
         };
 
         let msg = config.block_message.clone();
@@ -804,6 +916,7 @@ mod test {
             ttl: 86_400,
             consult_action: BlocklistConsultAction::Disabled,
             log_clients: true,
+            ..Default::default()
         };
 
         let zh = BlocklistZoneHandler::try_from_config(

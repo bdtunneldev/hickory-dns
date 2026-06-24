@@ -110,7 +110,10 @@ impl ZoneHandler for TtlModifierZoneHandler {
         _request_info: Option<&crate::server::RequestInfo<'_>>,
         _lookup_options: LookupOptions,
         last_result: LookupControlFlow<AuthLookup>,
-    ) -> (LookupControlFlow<AuthLookup>, Option<crate::proto::rr::TSigResponseContext>) {
+    ) -> (
+        LookupControlFlow<AuthLookup>,
+        Option<crate::proto::rr::TSigResponseContext>,
+    ) {
         match last_result {
             LookupControlFlow::Continue(Ok(lookup)) => (
                 LookupControlFlow::Continue(Ok(self.modify_lookup(lookup))),

@@ -91,10 +91,10 @@ pub async fn read_proxy_header<R: AsyncRead + Unpin>(
 
 fn address_len(fam: u8) -> usize {
     match fam {
-        0x11 | 0x12 => 12, // TCP4 / UDP4
-        0x21 | 0x22 => 36, // TCP6 / UDP6
+        0x11 | 0x12 => 12,  // TCP4 / UDP4
+        0x21 | 0x22 => 36,  // TCP6 / UDP6
         0x31 | 0x32 => 216, // UNIX stream / dgram
-        0x00 => 0,         // UNSPEC / LOCAL
+        0x00 => 0,          // UNSPEC / LOCAL
         _ => 0,
     }
 }
