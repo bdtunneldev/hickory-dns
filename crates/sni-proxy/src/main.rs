@@ -2,12 +2,15 @@ use std::path::PathBuf;
 
 use clap::Parser;
 use tracing::info;
-use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
+use tracing_subscriber::{EnvFilter, layer::SubscriberExt, util::SubscriberInitExt};
 
 use hickory_sni_proxy::{Config, SniProxyServer};
 
 #[derive(Parser, Debug)]
-#[command(name = "hickory-sni-proxy", about = "TLS SNI passthrough reverse proxy")]
+#[command(
+    name = "hickory-sni-proxy",
+    about = "TLS SNI passthrough reverse proxy"
+)]
 struct Args {
     /// Path to TOML configuration file.
     #[arg(short, long, default_value = "config/sni-proxy.toml")]

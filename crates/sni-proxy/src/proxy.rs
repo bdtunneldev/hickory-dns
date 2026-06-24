@@ -5,10 +5,10 @@ use std::sync::Arc;
 
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
-use tokio::time::{timeout, Duration};
+use tokio::time::{Duration, timeout};
 use tracing::{debug, info, warn};
 
-use crate::client_hello::{extract_sni_from_buffer, MAX_CLIENT_HELLO_BYTES};
+use crate::client_hello::{MAX_CLIENT_HELLO_BYTES, extract_sni_from_buffer};
 use crate::config::Config;
 use crate::error::{Result, SniProxyError};
 use crate::router::RouteTable;
@@ -22,10 +22,9 @@ pub struct SniProxyServer {
 
 impl SniProxyServer {
     pub fn from_config(config: &Config) -> Result<Self> {
-        let listen: SocketAddr = config
-            .listen
-            .parse()
-            .map_err(|e| SniProxyError::Config(format!("invalid listen {:?}: {e}", config.listen)))?;
+        let listen: SocketAddr = config.listen.parse().map_err(|e| {
+            SniProxyError::Config(format!("invalid listen {:?}: {e}", config.listen))
+        })?;
 
         Ok(Self {
             listen,
